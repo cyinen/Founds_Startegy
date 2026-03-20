@@ -1,0 +1,36 @@
+
+🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 
+     红利基金轮动策略回测系统（含货币基金）
+🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 🚀 
+============================================================
+正在获取基金数据... 2026-03-20 10:02:43
+============================================================
+✓ 515080 (中证红利ETF): 1515 条, 2019-11-28 ~ 2026-03-19
+✓ 510880 (华泰柏瑞上证红利ETF): 4692 条, 2006-11-17 ~ 2026-03-19
+✓ 515180 (易方达中证红利ETF): 1521 条, 2019-11-26 ~ 2026-03-19
+✓ 513530 (华泰柏瑞港股通红利ETF): 952 条, 2022-04-08 ~ 2026-03-19
+✓ 563020 (易方达红利低波 ETF): 552 条, 2023-12-06 ~ 2026-03-19
+✓ 510300 (沪深300ETF): 3371 条
+
+✓ 数据准备完成，有效交易日: 48 天
+正在获取货币基金 511880 (银华日利货币ETF) 数据...
+✓ 货币基金初始净值: 100.0616
+
+------------------------------------------------------------
+正在保存数据...
+Traceback (most recent call last):
+  File "/home/runner/work/Founds_Startegy/Founds_Startegy/main.py", line 751, in <module>
+    main()
+  File "/home/runner/work/Founds_Startegy/Founds_Startegy/main.py", line 705, in main
+    save_results(portfolio_values, trade_log, daily_status, merged_df, fund_data)
+  File "/home/runner/work/Founds_Startegy/Founds_Startegy/main.py", line 370, in save_results
+    trade_df.to_excel(f"{CONFIG['data_dir']}/trade_history.xlsx", index=False)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/pandas/util/_decorators.py", line 333, in wrapper
+    return func(*args, **kwargs)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/pandas/core/generic.py", line 2439, in to_excel
+    formatter.write(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/pandas/io/formats/excel.py", line 943, in write
+    writer = ExcelWriter(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/pandas/io/excel/_openpyxl.py", line 57, in __init__
+    from openpyxl.workbook import Workbook
+ModuleNotFoundError: No module named 'openpyxl'
