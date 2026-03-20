@@ -1,0 +1,29 @@
+name: Run Script Twice Daily
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-job:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install deps
+        run: pip install pandas numpy requests matplotlib
+
+      - name: Make script executable
+        run: chmod +x run.sh
+
+      - name: Run script
+        run: ./run.sh
