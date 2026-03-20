@@ -20,8 +20,10 @@ CONFIG = {
     'buy_threshold': -0.03,
     'sell_threshold': 0.07,
     'switch_threshold': 0.02,
+    'stop_loss_threshold': -0.1,  # 硬止损线（回撤超过10%清仓）
+    'cooldown_days': 15,           # [新增] 止损后的全局冷却期（交易日），期间禁止买入
     'ma_period': 120,
-    'start_date': '2026-01-01',
+    'start_date': '2026-03-15',
     'data_dir': './fund_data',
     'use_money_fund': True,
     'money_fund_yield_annual': 0.022,
@@ -121,7 +123,6 @@ def fetch_all_fund_data():
 
 
 def prepare_merged_data(fund_data, benchmark_df):
-    """合并数据 — 先算 MA 再筛选日期（修复 Bug #6）"""
     merged_df = None
     for code, df in fund_data.items():
         df_copy = df.rename(columns={'close': f'close_{code}'})
@@ -135,7 +136,6 @@ def prepare_merged_data(fund_data, benchmark_df):
     merged_df = merged_df.sort_values('date').reset_index(drop=True)
     merged_df = merged_df.ffill().bfill()
 
-    # ★ 先算 MA 和偏离度（在全量数据上）
     for code in fund_data.keys():
         col = f'close_{code}'
         merged_df[f'MA{CONFIG["ma_period"]}_{code}'] = merged_df[col].rolling(window=CONFIG['ma_period']).mean()
@@ -145,25 +145,27 @@ def prepare_merged_data(fund_data, benchmark_df):
         merged_df['close_benchmark'].rolling(window=CONFIG['ma_period']).mean()
     )
 
-    # ★ 再筛选日期、去空值
     merged_df = merged_df[merged_df['date'] >= CONFIG['start_date']].reset_index(drop=True)
     merged_df = merged_df.dropna().reset_index(drop=True)
 
     return merged_df
 
 
-# ========== 2. 回测（修复所有 Bug） ==========
+# ========== 2. 回测 ==========
 def run_backtest(merged_df, fund_data):
     capital = CONFIG['initial_capital']
     position = {code: 0.0 for code in fund_data.keys()}
     money_position = 0.0
-    holding_code = None          # 当前持有的红利基金代码
+    holding_code = None          
+    holding_cost = None          
+
+    # [新增] 冷却期计数器
+    cooldown_counter = 0
 
     portfolio_values = []
     trade_log = []
     daily_status = []
 
-    # ---------- 获取货币基金数据 ----------
     if CONFIG['use_money_fund']:
         print(f"正在获取货币基金 {MONEY_FUND['code']} ({MONEY_FUND['name']}) 数据...")
         raw = get_fund_k_history(MONEY_FUND['code'])
@@ -180,38 +182,52 @@ def run_backtest(merged_df, fund_data):
 
     has_money_col = 'close_money' in merged_df.columns
 
-    # ---------- 逐日遍历 ----------
     for idx, row in merged_df.iterrows():
         date = row['date']
         deviations = {code: row[f'deviation_{code}'] for code in fund_data.keys()}
-
-        # ====== 交易逻辑 ======
         action_today = None
 
-        # --- 1. 卖出判断 ---
+        # [新增] 每天一开始，先消耗当天的冷却时间
+        if cooldown_counter > 0:
+            cooldown_counter -= 1
+
+        # --- 1. 卖出 / 止损判断 ---
         if holding_code is not None:
             current_dev = deviations[holding_code]
-            if current_dev > CONFIG['sell_threshold']:
-                sell_price = row[f'close_{holding_code}']
+            current_price = row[f'close_{holding_code}']
+            current_return = (current_price / holding_cost) - 1 if holding_cost else 0
+            
+            is_take_profit = current_dev > CONFIG['sell_threshold']
+            is_stop_loss = current_return <= CONFIG['stop_loss_threshold']
+
+            if is_take_profit or is_stop_loss:
+                sell_price = current_price
                 capital = position[holding_code] * sell_price
-                old_code = holding_code                      # ★ 先保存
+                old_code = holding_code                      
+
+                action_type = '卖出(止盈)' if is_take_profit else '卖出(止损)'
+                reason = f'偏离度{current_dev * 100:.2f}% > {CONFIG["sell_threshold"] * 100}%' if is_take_profit else f'回撤 {current_return * 100:.2f}% 触碰止损线'
 
                 trade_log.append({
                     'date': date,
-                    'action': '卖出',
+                    'action': action_type,
                     'code': old_code,
                     'name': FUND_POOL[old_code],
                     'price': sell_price,
                     'shares': position[old_code],
                     'deviation': current_dev,
                     'value': capital,
-                    'reason': f'偏离度{current_dev * 100:.2f}% > {CONFIG["sell_threshold"] * 100}%',
+                    'reason': reason,
                 })
                 position[old_code] = 0
                 holding_code = None
-                action_today = f'卖出 {old_code}'
+                holding_cost = None  
+                action_today = action_type
 
-                # ★ 卖出后立即买入货币基金
+                # [核心修正] 如果是触发了止损，立刻开启冷却期，期间禁止买入任何红利基金
+                if is_stop_loss:
+                    cooldown_counter = CONFIG['cooldown_days']
+
                 if CONFIG['use_money_fund'] and has_money_col and pd.notna(row.get('close_money')):
                     money_position = capital / row['close_money']
                     trade_log.append({
@@ -223,21 +239,23 @@ def run_backtest(merged_df, fund_data):
                         'shares': money_position,
                         'deviation': 0,
                         'value': capital,
-                        'reason': '红利基金卖出后资金转入货币基金',
+                        'reason': '资金转入货币基金避险',
                     })
                     capital = 0
                     action_today += ' → 货币基金'
 
         # --- 2. 买入 / 换仓判断 ---
-        candidates = {c: d for c, d in deviations.items() if d < CONFIG['buy_threshold']}
+        # [核心修正] 如果在冷却期内，直接把候选池清空，强制观望
+        if cooldown_counter > 0:
+            candidates = {}
+        else:
+            candidates = {c: d for c, d in deviations.items() if d < CONFIG['buy_threshold']}
 
         if candidates:
             best_code = min(candidates, key=candidates.get)
             best_dev = candidates[best_code]
 
-            # 2-a. 当前空仓 → 买入
             if holding_code is None:
-                # 先赎回货币基金
                 if CONFIG['use_money_fund'] and money_position > 0 and has_money_col and pd.notna(row.get('close_money')):
                     capital = money_position * row['close_money']
                     trade_log.append({
@@ -258,6 +276,7 @@ def run_backtest(merged_df, fund_data):
                     shares = capital / buy_price
                     position[best_code] = shares
                     holding_code = best_code
+                    holding_cost = buy_price  
                     trade_log.append({
                         'date': date,
                         'action': '买入',
@@ -267,15 +286,13 @@ def run_backtest(merged_df, fund_data):
                         'shares': shares,
                         'deviation': best_dev,
                         'value': capital,
-                        'reason': f'偏离度{best_dev * 100:.2f}% < {CONFIG["buy_threshold"] * 100}%（最低）',
+                        'reason': f'偏离度{best_dev * 100:.2f}% < {CONFIG["buy_threshold"] * 100}%',
                     })
                     capital = 0
                     action_today = f'买入 {best_code}'
 
-            # 2-b. 持有中发现更便宜的 → 换仓
             elif best_code != holding_code and best_dev < deviations[holding_code] - CONFIG['switch_threshold']:
                 old_code = holding_code
-                # 卖出旧
                 sell_price = row[f'close_{old_code}']
                 capital = position[old_code] * sell_price
                 trade_log.append({
@@ -291,11 +308,11 @@ def run_backtest(merged_df, fund_data):
                 })
                 position[old_code] = 0
 
-                # 买入新
                 buy_price = row[f'close_{best_code}']
                 shares = capital / buy_price
                 position[best_code] = shares
                 holding_code = best_code
+                holding_cost = buy_price  
                 trade_log.append({
                     'date': date,
                     'action': '换仓买',
@@ -316,14 +333,12 @@ def run_backtest(merged_df, fund_data):
                 money_position = capital / row['close_money']
                 capital = 0
 
-        # ========== 计算当日收盘 portfolio_value（交易完成后） ==========
-        pv = capital  # 剩余现金
+        pv = capital
         if holding_code is not None:
             pv += position[holding_code] * row[f'close_{holding_code}']
         if money_position > 0 and has_money_col and pd.notna(row.get('close_money')):
             pv += money_position * row['close_money']
 
-        # ========== 记录 ==========
         if holding_code:
             h_name = FUND_POOL[holding_code]
             h_code = holding_code
@@ -339,6 +354,8 @@ def run_backtest(merged_df, fund_data):
             'portfolio_value': pv,
             'holding_code': h_code,
             'holding_name': h_name,
+            'holding_cost': holding_cost,  
+            'cooldown': cooldown_counter,  # [新增] 记录当前的冷却天数，方便排查
             'cash': capital,
             'money_shares': money_position,
             'action': action_today or '',
@@ -358,7 +375,6 @@ def run_backtest(merged_df, fund_data):
         daily_status.append(daily_record)
 
     return portfolio_values, trade_log, daily_status
-
 
 # ========== 3. 保存结果 ==========
 def save_results(portfolio_values, trade_log, daily_status, merged_df, fund_data):
@@ -482,9 +498,8 @@ def print_report(stats, trade_log, daily_status, fund_data):
 
     if trade_log:
         tdf = pd.DataFrame(trade_log)
-        # 只统计红利基金的买/卖（排除货币操作）
         buy_count = len(tdf[tdf['action'].isin(['买入', '换仓买'])])
-        sell_count = len(tdf[tdf['action'].isin(['卖出', '换仓卖'])])
+        sell_count = len(tdf[tdf['action'].isin(['卖出(止盈)', '卖出(止损)', '换仓卖'])])
         print(f"\n🔄 交易统计: 共 {len(tdf)} 笔 (红利买入 {buy_count}, 红利卖出 {sell_count})")
 
 
@@ -519,19 +534,31 @@ def print_current_status(daily_status, portfolio_values, fund_data):
 
     print("\n💡 操作建议:")
     current_holding = latest_pv['holding_code']
+    holding_cost = latest_pv.get('holding_cost')
     buy_cands = [s for s in signals if s['signal'] == '买入']
 
     if current_holding and current_holding in FUND_POOL:
         current_dev = latest[f'deviation_{current_holding}']
-        current_signal = get_signal(current_dev)
-        if current_signal == '卖出':
-            print(f"   ⚠️  当前持仓 {current_holding}({FUND_POOL[current_holding]}) 偏离度 {current_dev * 100:.2f}% 已超卖出线")
-            print(f"   👉 建议: 【卖出】→ 转入货币基金")
-            message = f"   ⚠️  当前持仓 {current_holding}({FUND_POOL[current_holding]}) 偏离度 {current_dev * 100:.2f}% 已超卖出线\n" + f"   👉 建议: 【卖出】→ 转入货币基金"
+        current_price = latest[f'close_{current_holding}']
+        current_return = (current_price / holding_cost) - 1 if holding_cost else 0
+        
+        # [修改] 加入止损提示
+        if current_return <= CONFIG['stop_loss_threshold']:
+            print(f"   ⚠️  当前持仓 {current_holding}({FUND_POOL[current_holding]}) 回撤 {current_return * 100:.2f}% 已触发硬止损！")
+            print(f"   👉 建议: 【卖出(止损)】→ 转入货币基金")
+            message = f"   ⚠️  当前持仓 {current_holding}({FUND_POOL[current_holding]}) 回撤 {current_return * 100:.2f}% 已触发硬止损！\n" + f"   👉 建议: 【卖出(止损)】→ 转入货币基金"
             url = f"https://api.chuckfang.com/cyinen/{message}"
-            response = requests.get(url)
+            try: requests.get(url, timeout=5)
+            except: pass
 
-            
+        elif current_dev > CONFIG['sell_threshold']:
+            print(f"   ⚠️  当前持仓 {current_holding}({FUND_POOL[current_holding]}) 偏离度 {current_dev * 100:.2f}% 已超卖出线")
+            print(f"   👉 建议: 【卖出(止盈)】→ 转入货币基金")
+            message = f"   ⚠️  当前持仓 {current_holding}({FUND_POOL[current_holding]}) 偏离度 {current_dev * 100:.2f}% 已超卖出线\n" + f"   👉 建议: 【卖出(止盈)】→ 转入货币基金"
+            url = f"https://api.chuckfang.com/cyinen/{message}"
+            try: requests.get(url, timeout=5)
+            except: pass
+
         elif buy_cands:
             best = min(buy_cands, key=lambda x: x['dev'])
             if best['code'] != current_holding and best['dev'] < current_dev - CONFIG['switch_threshold']:
@@ -539,39 +566,40 @@ def print_current_status(daily_status, portfolio_values, fund_data):
                 print(f"   👉 建议: 【换仓】{current_holding} → {best['code']}")
                 message = f"   ⚠️  更优基金 {best['code']}({FUND_POOL[best['code']]}) 偏离度 {best['dev'] * 100:.2f}%\n" + f"   👉 建议: 【换仓】{current_holding} → {best['code']}"
                 url = f"https://api.chuckfang.com/cyinen/{message}"
-                response = requests.get(url)
-
+                try: requests.get(url, timeout=5)
+                except: pass
             
             else:
-                print(f"   ✅ 持仓 {current_holding} 偏离度 {current_dev * 100:.2f}%")
+                print(f"   ✅ 持仓 {current_holding} 偏离度 {current_dev * 100:.2f}%，当前盈亏 {current_return * 100:.2f}%")
                 print(f"   👉 建议: 【持有】")
-                
                 message = f"   ✅ 持仓 {current_holding} 偏离度 {current_dev * 100:.2f}%\n" + f"   👉 建议: 【持有】"
                 url = f"https://api.chuckfang.com/cyinen/{message}"
-                response = requests.get(url)
+                try: requests.get(url, timeout=5)
+                except: pass
         else:
-            print(f"   ✅ 持仓 {current_holding} 偏离度 {current_dev * 100:.2f}%")
+            print(f"   ✅ 持仓 {current_holding} 偏离度 {current_dev * 100:.2f}%，当前盈亏 {current_return * 100:.2f}%")
             print(f"   👉 建议: 【持有】")
-            
             message = f"   ✅ 持仓 {current_holding} 偏离度 {current_dev * 100:.2f}%\n" + f"   👉 建议: 【持有】"
             url = f"https://api.chuckfang.com/cyinen/{message}"
-            response = requests.get(url)
+            try: requests.get(url, timeout=5)
+            except: pass
     else:
         if buy_cands:
             best = min(buy_cands, key=lambda x: x['dev'])
             print(f"   🎯 买入机会: {best['code']}({FUND_POOL[best['code']]}) 偏离度 {best['dev'] * 100:.2f}%")
             print(f"   👉 建议: 【赎回货币基金 → 买入 {best['code']}】")
-            
             message = f"   🎯 买入机会: {best['code']}({FUND_POOL[best['code']]}) 偏离度 {best['dev'] * 100:.2f}%\n" + f"   👉 建议: 【赎回货币基金 → 买入 {best['code']}】"
             url = f"https://api.chuckfang.com/cyinen/{message}"
-            response = requests.get(url)
+            try: requests.get(url, timeout=5)
+            except: pass
             
         else:
             print(f"   ⏳ 无买入信号")
             print(f"   👉 建议: 【观望】资金停留在货币基金")
             message = f"   ⏳ 无买入信号\n" + f"   👉 建议: 【观望】资金停留在货币基金"
             url = f"https://api.chuckfang.com/cyinen/{message}"
-            response = requests.get(url)
+            try: requests.get(url, timeout=5)
+            except: pass
     print("=" * 70)
 
 
@@ -643,7 +671,7 @@ def plot_charts(portfolio_values, daily_status, trade_log, fund_data):
                 val = portfolio_df.loc[idx[0], 'portfolio_value'] / 10000
                 if t['action'] in ['买入', '换仓买']:
                     ax2.scatter(t['date'], val, color='green', marker='^', s=100, zorder=5)
-                elif t['action'] in ['卖出', '换仓卖']:
+                elif '卖出' in t['action'] or t['action'] == '换仓卖':
                     ax2.scatter(t['date'], val, color='red', marker='v', s=100, zorder=5)
     fv = portfolio_df['portfolio_value'].iloc[-1]
     cm = portfolio_df['portfolio_value'].cummax()
@@ -655,7 +683,7 @@ def plot_charts(portfolio_values, daily_status, trade_log, fund_data):
     ax2.legend(handles=[
         Line2D([0], [0], color='red', linewidth=2, label='策略净值'),
         Line2D([0], [0], marker='^', color='w', markerfacecolor='green', markersize=10, label='买入'),
-        Line2D([0], [0], marker='v', color='w', markerfacecolor='red', markersize=10, label='卖出'),
+        Line2D([0], [0], marker='v', color='w', markerfacecolor='red', markersize=10, label='卖出/止损'),
     ], loc='upper left')
 
     # 图3: 偏离度
@@ -686,7 +714,7 @@ def plot_charts(portfolio_values, daily_status, trade_log, fund_data):
 # ========== 7. 主函数 ==========
 def main():
     print("\n" + "🚀 " * 15)
-    print("     红利基金轮动策略回测系统（含货币基金）")
+    print("     红利基金轮动策略回测系统（含硬止损）")
     print("🚀 " * 15)
 
     fund_data, benchmark_df = fetch_all_fund_data()
@@ -714,39 +742,5 @@ def main():
     print("=" * 70)
 
 
-def check_current_status():
-    print("\n📡 正在获取最新数据...")
-    fund_data, benchmark_df = fetch_all_fund_data()
-    if not fund_data:
-        return
-    merged_df = prepare_merged_data(fund_data, benchmark_df)
-    latest = merged_df.iloc[-1]
-
-    print("\n" + "=" * 70)
-    print(f"【🎯 最新市场状态】 {latest['date'].strftime('%Y-%m-%d')}")
-    print("=" * 70)
-    print(f"\n{'代码':<10} {'名称':<14} {'收盘价':<10} {'MA120':<10} {'偏离度':<10} {'信号'}")
-    print("-" * 70)
-
-    buy_cands = []
-    for code in fund_data.keys():
-        close = latest[f'close_{code}']
-        ma120 = latest[f'MA{CONFIG["ma_period"]}_{code}']
-        dev = latest[f'deviation_{code}']
-        signal = get_signal(dev)
-        icon = {"买入": "🟢 买入", "卖出": "🔴 卖出"}.get(signal, "⚪ 观望")
-        print(f"{code:<10} {FUND_POOL[code]:<12} {close:<10.4f} {ma120:<10.4f} {dev * 100:>6.2f}%    {icon}")
-        if signal == '买入':
-            buy_cands.append({'code': code, 'dev': dev})
-    print("-" * 70)
-
-    if buy_cands:
-        best = min(buy_cands, key=lambda x: x['dev'])
-        print(f"\n💡 最佳买入: {best['code']} ({FUND_POOL[best['code']]}) 偏离度: {best['dev'] * 100:.2f}%")
-    else:
-        print(f"\n💡 无买入信号，资金留在货币基金")
-
-
 if __name__ == "__main__":
     main()
-    # check_current_status()
