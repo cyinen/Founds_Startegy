@@ -2,9 +2,7 @@ name: Run Script Twice Daily
 
 on:
   schedule:
-    - cron: '0 1 * * *'
-    - cron: '30 7 * * *'
-    - cron: '*/5 * * * *'   # 
+    - cron: '*/1 * * * *'   # 
   workflow_dispatch:
 
 permissions:
