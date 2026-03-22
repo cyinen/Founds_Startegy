@@ -548,17 +548,12 @@ def print_current_status(daily_status, portfolio_values, fund_data):
         if current_return <= CONFIG['stop_loss_threshold']:
             print(f"   ⚠️  当前持仓 {current_holding}({FUND_POOL[current_holding]}) 回撤 {current_return * 100:.2f}% 已触发硬止损！")
             print(f"   👉 建议: 【卖出(止损)】→ 转入货币基金")
-            message = f"   ⚠️  当前持仓 {current_holding}({FUND_POOL[current_holding]}) 回撤 {current_return * 100:.2f}% 已触发硬止损！\n" + f"   👉 建议: 【卖出(止损)】→ 转入货币基金"
-            url = f"https://api.chuckfang.com/cyinen/{message}"
-            try: requests.get(url, timeout=5)
-            except: pass
+
 
         elif current_dev > CONFIG['sell_threshold']:
             print(f"   ⚠️  当前持仓 {current_holding}({FUND_POOL[current_holding]}) 偏离度 {current_dev * 100:.2f}% 已超卖出线")
             print(f"   👉 建议: 【卖出(止盈)】→ 转入货币基金")
-            message = f"   ⚠️  当前持仓 {current_holding}({FUND_POOL[current_holding]}) 偏离度 {current_dev * 100:.2f}% 已超卖出线\n" + f"   👉 建议: 【卖出(止盈)】→ 转入货币基金"
-            url = f"https://api.chuckfang.com/cyinen/{message}"
-            try: requests.get(url, timeout=5)
+
             except: pass
 
         elif buy_cands:
@@ -566,42 +561,26 @@ def print_current_status(daily_status, portfolio_values, fund_data):
             if best['code'] != current_holding and best['dev'] < current_dev - CONFIG['switch_threshold']:
                 print(f"   ⚠️  更优基金 {best['code']}({FUND_POOL[best['code']]}) 偏离度 {best['dev'] * 100:.2f}%")
                 print(f"   👉 建议: 【换仓】{current_holding} → {best['code']}")
-                message = f"   ⚠️  更优基金 {best['code']}({FUND_POOL[best['code']]}) 偏离度 {best['dev'] * 100:.2f}%\n" + f"   👉 建议: 【换仓】{current_holding} → {best['code']}"
-                url = f"https://api.chuckfang.com/cyinen/{message}"
-                try: requests.get(url, timeout=5)
-                except: pass
+
             
             else:
                 print(f"   ✅ 持仓 {current_holding} 偏离度 {current_dev * 100:.2f}%，当前盈亏 {current_return * 100:.2f}%")
                 print(f"   👉 建议: 【持有】")
-                message = f"   ✅ 持仓 {current_holding} 偏离度 {current_dev * 100:.2f}%\n" + f"   👉 建议: 【持有】"
-                url = f"https://api.chuckfang.com/cyinen/{message}"
-                try: requests.get(url, timeout=5)
-                except: pass
+
         else:
             print(f"   ✅ 持仓 {current_holding} 偏离度 {current_dev * 100:.2f}%，当前盈亏 {current_return * 100:.2f}%")
             print(f"   👉 建议: 【持有】")
-            message = f"   ✅ 持仓 {current_holding} 偏离度 {current_dev * 100:.2f}%\n" + f"   👉 建议: 【持有】"
-            url = f"https://api.chuckfang.com/cyinen/{message}"
-            try: requests.get(url, timeout=5)
-            except: pass
+
     else:
         if buy_cands:
             best = min(buy_cands, key=lambda x: x['dev'])
             print(f"   🎯 买入机会: {best['code']}({FUND_POOL[best['code']]}) 偏离度 {best['dev'] * 100:.2f}%")
             print(f"   👉 建议: 【赎回货币基金 → 买入 {best['code']}】")
-            message = f"   🎯 买入机会: {best['code']}({FUND_POOL[best['code']]}) 偏离度 {best['dev'] * 100:.2f}%\n" + f"   👉 建议: 【赎回货币基金 → 买入 {best['code']}】"
-            url = f"https://api.chuckfang.com/cyinen/{message}"
-            try: requests.get(url, timeout=5)
-            except: pass
-            
+
         else:
             print(f"   ⏳ 无买入信号")
             print(f"   👉 建议: 【观望】资金停留在货币基金")
-            message = f"   ⏳ 无买入信号\n" + f"   👉 建议: 【观望】资金停留在货币基金"
-            url = f"https://api.chuckfang.com/cyinen/{message}"
-            try: requests.get(url, timeout=5)
-            except: pass
+
     print("=" * 70)
 
 
