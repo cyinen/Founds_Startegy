@@ -36,6 +36,11 @@ jobs:
 
           message=$(sed -n '81,83p' log.txt)
           echo "message: $message"
+          # 去换行（拼成一行）
+          message=$(echo "$message" | paste -sd " " -)
+          
+          # URL 编码（关键！）
+          message=$(python3 -c "import urllib.parse; print(urllib.parse.quote('''$message'''))")
 
           url="https://api.chuckfang.com/${NAME}/${message}"
           echo "request url: $url"
