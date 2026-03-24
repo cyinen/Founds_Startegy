@@ -34,7 +34,7 @@ jobs:
         run: |
           ./run.sh
 
-          message=$(sed -n '81,83p' log.txt)
+          message=$(tail -n 30 log.txt)
           echo "message: $message"
           # 去换行（拼成一行）
           message=$(echo "$message" | paste -sd " " -)
