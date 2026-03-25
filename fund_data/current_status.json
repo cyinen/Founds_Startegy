@@ -1,28 +1,28 @@
 {
-  "update_time": "2026-03-25 05:43:54",
+  "update_time": "2026-03-25 07:15:50",
   "latest_date": "2026-03-25",
-  "portfolio_value": 1025.53,
+  "portfolio_value": 1026.39,
   "holding": "易方达中证红利低波动ETF(场内)",
   "funds": {
     "515080": {
       "name": "招商中证红利ETF(场内）",
-      "close": 1.598,
+      "close": 1.599,
       "MA120": 1.5924,
-      "deviation": 0.35,
+      "deviation": 0.41,
       "signal": "观望"
     },
     "510880": {
       "name": "华泰柏瑞上证红利ETF(场内)",
-      "close": 3.249,
-      "MA120": 3.2142,
-      "deviation": 1.08,
+      "close": 3.256,
+      "MA120": 3.2143,
+      "deviation": 1.3,
       "signal": "观望"
     },
     "515180": {
       "name": "易方达中证红利ETF(场内)",
-      "close": 1.427,
+      "close": 1.429,
       "MA120": 1.4087,
-      "deviation": 1.3,
+      "deviation": 1.44,
       "signal": "观望"
     },
     "513530": {
@@ -34,9 +34,9 @@
     },
     "563020": {
       "name": "易方达中证红利低波动ETF(场内)",
-      "close": 1.194,
+      "close": 1.195,
       "MA120": 1.2065,
-      "deviation": -1.04,
+      "deviation": -0.96,
       "signal": "观望"
     },
     "510720": {
@@ -48,9 +48,9 @@
     },
     "159209": {
       "name": "招商中证红利质量ETF(场内)",
-      "close": 1.202,
-      "MA120": 1.2007,
-      "deviation": 0.1,
+      "close": 1.203,
+      "MA120": 1.2008,
+      "deviation": 0.19,
       "signal": "观望"
     }
   }
