@@ -6,7 +6,7 @@ from datetime import datetime
 from datetime import date
 from typing import Optional
 
-import os
+import os,sys
 import random
 import time
 import requests
