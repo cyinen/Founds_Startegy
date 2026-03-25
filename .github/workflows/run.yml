@@ -24,7 +24,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install deps
-        run: pip install pandas numpy requests matplotlib openpyxl
+        run: pip install pandas numpy requests matplotlib openpyxl pytdx
 
       - name: Make script executable
         run: chmod +x run.sh
