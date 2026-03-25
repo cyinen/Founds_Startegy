@@ -6,7 +6,7 @@ from datetime import datetime
 from datetime import date
 from typing import Optional
 
-import os,sys,io
+import os
 import random
 import time
 import requests
@@ -14,8 +14,12 @@ import json
 
 import warnings
 import matplotlib
-
-
+import platform
+import os
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+import warnings
 
 try:
     from pytdx.hq import TdxHq_API
@@ -23,13 +27,45 @@ try:
 except ImportError:
     HAS_PYTDX = False
     print("⚠️ 未安装 pytdx，pip install pytdx")
-
 matplotlib.use('Agg')
 warnings.filterwarnings("ignore")
 
-# 设置中文显示
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
-plt.rcParams['axes.unicode_minus'] = False
+
+def setup_chinese_matplotlib():
+    """跨平台中文字体配置 - 终极方案"""
+    
+    # 1️⃣ 优先尝试加载项目自带字体
+    local_font = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
+                               'fonts', 'SourceHanSansSC-Regular.otf')
+    if os.path.exists(local_font):
+        fm.fontManager.addfont(local_font)
+        font_name = fm.FontProperties(fname=local_font).get_name()
+        plt.rcParams['font.sans-serif'] = [font_name, 'DejaVu Sans']
+        plt.rcParams['axes.unicode_minus'] = False
+        return
+    
+    # 2️⃣ 按系统选择 + 自动检测可用性
+    system = platform.system()
+    candidates = {
+        'Windows': ['Microsoft YaHei', 'SimHei'],
+        'Darwin':  ['PingFang SC', 'Heiti SC', 'Arial Unicode MS'],
+        'Linux':   ['WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'Droid Sans Fallback'],
+    }
+    
+    font_list = candidates.get(system, [])
+    available = {f.name for f in fm.fontManager.ttflist}
+    usable = [f for f in font_list if f in available]
+    
+    if not usable:
+        # 3️⃣ 全部候选扫一遍
+        all_candidates = sum(candidates.values(), [])
+        usable = [f for f in all_candidates if f in available]
+    
+    usable.append('DejaVu Sans')
+    plt.rcParams['font.sans-serif'] = usable
+    plt.rcParams['axes.unicode_minus'] = False
+
+setup_chinese_matplotlib()
 
 # ========== 配置参数 ==========
 CONFIG = {
