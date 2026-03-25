@@ -3,12 +3,27 @@ import numpy as np
 import requests
 import matplotlib.pyplot as plt
 from datetime import datetime
+from datetime import date
+from typing import Optional
+
 import os
+import random
+import time
+import requests
 import json
+
 import warnings
 import matplotlib
-import sys
-import io
+
+
+
+try:
+    from pytdx.hq import TdxHq_API
+    HAS_PYTDX = True
+except ImportError:
+    HAS_PYTDX = False
+    print("⚠️ 未安装 pytdx，pip install pytdx")
+
 matplotlib.use('Agg')
 warnings.filterwarnings("ignore")
 
@@ -18,7 +33,7 @@ plt.rcParams['axes.unicode_minus'] = False
 
 # ========== 配置参数 ==========
 CONFIG = {
-    'initial_capital': 10000,
+    'initial_capital': 1000,
     'buy_threshold': -0.03,
     'sell_threshold': 0.07,
     'switch_threshold': 0.02,
@@ -26,6 +41,7 @@ CONFIG = {
     'cooldown_days': 15,           # [新增] 止损后的全局冷却期（交易日），期间禁止买入
     'ma_period': 120,
     'start_date': '2026-03-15',
+    'end_date': None,
     'data_dir': './fund_data',
     'use_money_fund': True,
     'money_fund_yield_annual': 0.022,
@@ -54,7 +70,80 @@ BENCHMARK = {
 os.makedirs(CONFIG['data_dir'], exist_ok=True)
 
 
-# ========== 1. 数据获取 ==========
+# ========== 通达信服务器列表 ==========
+_TDX_SERVERS = [
+    ('180.153.18.170', 7709),
+    ('119.147.212.81', 7709),
+    ('14.215.128.18', 7709),
+    ('59.173.18.140', 7709),
+    ('202.108.253.130', 7709),
+    ('202.108.253.131', 7709),
+    ('60.12.136.250', 7709),
+    ('115.238.56.198', 7709),
+    ('218.75.126.9', 7709),
+    ('221.194.181.176', 7709),
+]
+
+
+def _get_market(fund_code: str) -> int:
+    """0=深交所(0/1/3开头), 1=上交所(5/6/9开头)"""
+    return 1 if fund_code[0] in ('5', '6', '9') else 0
+
+
+# ========== pytdx 获取实时价格 ==========
+def get_realtime_price(fund_code: str) -> Optional[dict]:
+    """
+    通过通达信获取 ETF 实时价格，自动轮询服务器。
+    返回 dict 或 None。
+    """
+    if not HAS_PYTDX:
+        return None
+
+    market = _get_market(fund_code)
+    servers = _TDX_SERVERS.copy()
+    random.shuffle(servers)
+
+    for host, port in servers:
+        api = TdxHq_API()
+        try:
+            if not api.connect(host, port):
+                continue
+
+            data = api.get_security_quotes([(market, fund_code)])
+            api.disconnect()
+
+            if not data or len(data) == 0:
+                continue
+
+            q = data[0]
+            price = q['price'] / 10
+            last_close = q['last_close'] / 10
+
+            if price <= 0:
+                continue
+
+            change_pct = round((price - last_close) / last_close * 100, 2) if last_close > 0 else 0.0
+
+            return {
+                'code':       fund_code,
+                'price':      round(price, 4),
+                'last_close': round(last_close, 4),
+                'change_pct': change_pct,
+                'time':       pd.Timestamp.now().strftime('%Y-%m-%d %H:%M'),
+            }
+
+        except Exception:
+            try:
+                api.disconnect()
+            except Exception:
+                pass
+            continue
+
+    print(f"  [{fund_code}] pytdx 所有服务器均失败")
+    return None
+
+
+# ========== 1. 数据获取（接口不变） ==========
 def get_fund_k_history(fund_code: str, pz: int = 40000) -> pd.DataFrame:
     headers = {
         'User-Agent': 'EMProjJijin/6.2.8 (iPhone; iOS 13.6; Scale/2.00)',
@@ -77,28 +166,63 @@ def get_fund_k_history(fund_code: str, pz: int = 40000) -> pd.DataFrame:
         'version': '6.2.8',
     }
     url = 'https://fundmobapi.eastmoney.com/FundMNewApi/FundMNHisNetList'
+
+    df = pd.DataFrame()
     try:
         resp = requests.get(url, headers=headers, data=data, timeout=10).json()
-        if not resp or not resp.get('Datas'):
-            return pd.DataFrame()
-        rows = []
-        for item in resp['Datas']:
-            rows.append({
-                '日期': item['FSRQ'],
-                '单位净值': item['DWJZ'],
-                '累计净值': item['LJJZ'],
-                '涨跌幅': item['JZZZL'],
-            })
-        df = pd.DataFrame(rows)
-        df['单位净值'] = pd.to_numeric(df['单位净值'], errors='coerce')
-        df['累计净值'] = pd.to_numeric(df['累计净值'], errors='coerce')
-        df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
-        df = df.sort_values('日期').reset_index(drop=True)
-        return df
+        if resp and resp.get('Datas'):
+            rows = []
+            for item in resp['Datas']:
+                rows.append({
+                    '日期':   item['FSRQ'],
+                    '单位净值': item['DWJZ'],
+                    '累计净值': item['LJJZ'],
+                    '涨跌幅':  item['JZZZL'],
+                })
+            df = pd.DataFrame(rows)
+            df['单位净值'] = pd.to_numeric(df['单位净值'], errors='coerce')
+            df['累计净值'] = pd.to_numeric(df['累计净值'], errors='coerce')
+            df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
+            df = df.sort_values('日期').reset_index(drop=True)
     except Exception as e:
-        print(f"获取 {fund_code} 数据失败: {e}")
-        return pd.DataFrame()
+        print(f"获取 {fund_code} 历史净值失败: {e}")
 
+    # ---- 判断是否需要补充当天数据 ----
+    today = pd.Timestamp(date.today())
+
+    if today.weekday() >= 5:
+        return df
+    if not df.empty and (df['日期'] == today).any():
+        return df
+
+    # ---- pytdx 获取实时价格补充 ----
+    quote = get_realtime_price(fund_code)
+    if quote:
+        try:
+            quote_date = pd.to_datetime(quote['time']).normalize()
+            if quote_date == today:
+                last_ljjz = None
+                if not df.empty:
+                    last_row = df.iloc[-1]
+                    if pd.notna(last_row['累计净值']) and pd.notna(last_row['单位净值']):
+                        last_ljjz = round(
+                            last_row['累计净值'] + (quote['price'] - last_row['单位净值']), 4
+                        )
+
+                est_row = pd.DataFrame([{
+                    '日期':    quote_date,
+                    '单位净值': quote['price'],
+                    '累计净值': last_ljjz,
+                    '涨跌幅':  str(quote['change_pct']),
+                }])
+                df = pd.concat([df, est_row], ignore_index=True)
+                df = df.sort_values('日期').reset_index(drop=True)
+                print(f"[{fund_code}] 补充实时价格 {quote['price']}"
+                      f"（{quote['change_pct']}%，{quote['time']}）")
+        except Exception as e:
+            print(f"[{fund_code}] 解析实时数据失败: {e}")
+
+    return df
 
 def fetch_all_fund_data():
     print("=" * 60)
